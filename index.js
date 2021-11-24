@@ -183,8 +183,6 @@ async function compareEachOther(files) {
 }
 
 async function compareSpecificImages(files, comparisonFiles) {
-  const similarImages = new Map();
-
   const promises = comparisonFiles.map((comparisonFile) => (
     new Promise(async (res, rej) => {
       try {
@@ -202,10 +200,39 @@ async function compareSpecificImages(files, comparisonFiles) {
   
   const comparisonImages = await Promise.all(promises);
 
-  const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_grey);
-  bar.start(files.length, DEFAULT_BAR_VALUE);
+  const multiBar = new cliProgress.MultiBar({
+    clearOnComplete: false,
+    hideCursor: true
+  }, cliProgress.Presets.shades_grey);
 
-  // TODO: Сделать асинхронное сравнение сразу нескольких картинок одновременно
+  const chunks = splitArrayToChunks(files, NUMBER_OF_STREAMS);
+
+  const comparisonPromises = chunks.map((chunk) => {
+    const bar = multiBar.create(chunk.length, DEFAULT_BAR_VALUE);
+
+    return compareSpecificImagesCycle(chunk, comparisonImages, bar);
+  });
+
+  const mapsOfSimilarImages = await Promise.all(comparisonPromises);
+  
+  const similarImages = new Map();
+  
+  mapsOfSimilarImages.forEach((map) => {
+    map.forEach((value, key) => {
+      const prevValue = similarImages.get(key) || [];
+
+      similarImages.set(key, [...prevValue, ...value]);
+    });
+  });
+
+  multiBar.stop();
+
+  return similarImages;
+}
+
+async function compareSpecificImagesCycle(files, comparisonImages, bar) {
+  const similarImages = new Map();
+
   let index = 0;
   for (const file of files) {
     index++;
@@ -222,8 +249,6 @@ async function compareSpecificImages(files, comparisonFiles) {
       }
     }
   }
-
-  bar.stop();
 
   return similarImages;
 }
