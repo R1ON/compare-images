@@ -2,6 +2,7 @@ const path = require('path');
 const fse = require('fs-extra');
 const glob = require('glob');
 const jimp = require('jimp');
+const { Worker } = require('worker_threads');
 
 const cliProgress = require('cli-progress');
 const argv = require('minimist')(process.argv.slice(2));
@@ -14,6 +15,7 @@ const {
   splitArrayToChunks,
   compareImages,
   compareCycle,
+  getFunctionBody,
 } = require('./src/utils');
 const {
   IMAGES_FOLDER,
@@ -52,6 +54,8 @@ glob(`${IMAGES_FOLDER}/**/*`, { nodir: true }, (err, files) => {
     }
 
     let similarImages;
+
+    console.time('test');
 
     const hasComparisonImages = comparisonImages.length > 0;
     if (hasComparisonImages) {
@@ -101,6 +105,8 @@ glob(`${IMAGES_FOLDER}/**/*`, { nodir: true }, (err, files) => {
       console.error('err', err);
       return;
     }
+
+    console.timeEnd('test');
 
     console.log(decliningTitle(similarImages.size));
     console.log(`Зайдите в папку ${RESULT_FOLDER} и проверьте правильность найденных дубликатов.`);
@@ -183,34 +189,50 @@ async function compareEachOther(files) {
 }
 
 async function compareSpecificImages(files, comparisonFiles) {
-  const promises = comparisonFiles.map((comparisonFile) => (
-    new Promise(async (res, rej) => {
-      try {
-        const file = await jimp.read(comparisonFile);
+  // const promises = comparisonFiles.map((comparisonFile) => (
+  //   new Promise(async (res, rej) => {
+  //     try {
+  //       const file = await jimp.read(comparisonFile);
+  //
+  //       res({ file, path: comparisonFile });
+  //     }
+  //     catch (err) {
+  //       rej(err);
+  //     }
+  //   })
+  // ));
 
-        res({ file, path: comparisonFile });
-      }
-      catch (err) {
-        rej(err);
-      }
-    })
-  ));
-
-  console.log('Начинаю сканировать картинки...');
-  
-  const comparisonImages = await Promise.all(promises);
-
-  const multiBar = new cliProgress.MultiBar({
-    clearOnComplete: false,
-    hideCursor: true
-  }, cliProgress.Presets.shades_grey);
+  // console.log('Начинаю сканировать картинки...');
+  //
+  // const comparisonImages = await Promise.all(promises);
+  //
+  // const multiBar = new cliProgress.MultiBar({
+  //   clearOnComplete: false,
+  //   hideCursor: true
+  // }, cliProgress.Presets.shades_grey);
 
   const chunks = splitArrayToChunks(files, NUMBER_OF_STREAMS);
 
-  const comparisonPromises = chunks.map((chunk) => {
-    const bar = multiBar.create(chunk.length, DEFAULT_BAR_VALUE);
+  const comparisonPromises = chunks.map((chunk, index) => {
+    // const bar = multiBar.create(chunk.length, DEFAULT_BAR_VALUE);
 
-    return compareSpecificImagesCycle(chunk, comparisonImages, bar);
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(getFunctionBody(compareSpecificImagesCycle.toString()), {
+        eval: true,
+        workerData: {
+          index,
+          files: chunk,
+          comparisonFiles,
+        },
+      });
+
+      worker.on('message', (msg) => resolve(msg));
+      worker.on('error', reject);
+      worker.on('exit', (code) => {
+        if (code !== 0)
+          reject(new Error(`Worker stopped with exit code ${code}`));
+      });
+    })
   });
 
   const mapsOfSimilarImages = await Promise.all(comparisonPromises);
@@ -225,30 +247,62 @@ async function compareSpecificImages(files, comparisonFiles) {
     });
   });
 
-  multiBar.stop();
+  // multiBar.stop();
 
   return similarImages;
 }
 
-async function compareSpecificImagesCycle(files, comparisonImages, bar) {
-  const similarImages = new Map();
+function compareSpecificImagesCycle() {
+  const { workerData, parentPort, index } = require('worker_threads');
+  // const cliProgress = require('cli-progress');
+  const jimp = require('jimp');
+  const { compareImages } = require('./src/utils');
 
-  let index = 0;
-  for (const file of files) {
-    index++;
-    bar.update(index);
+  const { files, comparisonFiles } = workerData;
+  // const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
+  // bar.start(files.length, 0);
 
-    for (const comparisonImage of comparisonImages) {
-      const imagesAreSame = await compareImages(file, comparisonImage.file);
+  async function test() {
+    const promises = comparisonFiles.map((comparisonFile) => (
+      new Promise(async (res, rej) => {
+        try {
+          const file = await jimp.read(comparisonFile);
 
-      if (imagesAreSame) {
-        const prevValue = similarImages.get(comparisonImage.path) || [];
+          res({ file, path: comparisonFile });
+        }
+        catch (err) {
+          rej(err);
+        }
+      })
+    ));
 
-        similarImages.set(comparisonImage.path, [...prevValue, file]);
-        break;
+    console.log('Начинаю сканировать картинки...');
+
+    const comparisonImages = await Promise.all(promises);
+
+    const similarImages = new Map();
+
+
+    let index = 0;
+    for (const file of files) {
+      console.log(`Поток: ${index}, файл ${index}/${files.length}`);
+      index++;
+      // bar.update(index);
+
+      for (const comparisonImage of comparisonImages) {
+        const imagesAreSame = await compareImages(file, comparisonImage.file);
+
+        if (imagesAreSame) {
+          const prevValue = similarImages.get(comparisonImage.path) || [];
+
+          similarImages.set(comparisonImage.path, [...prevValue, file]);
+          break;
+        }
       }
     }
+
+    parentPort.postMessage(similarImages);
   }
 
-  return similarImages;
+  test();
 }

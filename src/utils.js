@@ -8,7 +8,7 @@ const { IMAGES_FOLDER, DELETE_ANSWERS } = require('./constants');
 
 const DIFF_PERCENT = typeof argv.d === 'number' ? parseFloat(argv.d) : 0.1;
 
-module.exports.compareImages = compareImages = async (imagePath1, file2) => {
+module.exports.compareImages = async function compareImages(imagePath1, file2) {
   let image1;
   let image2;
 
@@ -133,3 +133,14 @@ module.exports.decliningTitle = (imageLength) => {
 
   return titles[2];
 };
+
+module.exports.getFunctionBody = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value.substring(
+    value.indexOf('{') + 1,
+    value.lastIndexOf('}')
+  );
+}
