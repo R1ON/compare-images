@@ -220,7 +220,7 @@ async function compareSpecificImages(files, comparisonFiles) {
       const worker = new Worker(getFunctionBody(compareSpecificImagesCycle.toString()), {
         eval: true,
         workerData: {
-          index,
+          workerIndex: index,
           files: chunk,
           comparisonFiles,
         },
@@ -253,12 +253,12 @@ async function compareSpecificImages(files, comparisonFiles) {
 }
 
 function compareSpecificImagesCycle() {
-  const { workerData, parentPort, index } = require('worker_threads');
+  const { workerData, parentPort } = require('worker_threads');
   // const cliProgress = require('cli-progress');
   const jimp = require('jimp');
   const { compareImages } = require('./src/utils');
 
-  const { files, comparisonFiles } = workerData;
+  const { files, comparisonFiles, workerIndex } = workerData;
   // const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
   // bar.start(files.length, 0);
 
@@ -285,7 +285,7 @@ function compareSpecificImagesCycle() {
 
     let index = 0;
     for (const file of files) {
-      console.log(`Поток: ${index}, файл ${index}/${files.length}`);
+      console.log(`Поток: ${workerIndex}, файл ${index}/${files.length}`);
       index++;
       // bar.update(index);
 
